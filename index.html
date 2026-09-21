@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نظام المحفظة وتسجيل الدخول بـ QR Code</title>
+    <!-- مكتبة إنشاء QR Code -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- مكتبة قراءة QR Code من الصور -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #f4f6f9;
+            color: #333;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 900px;
+            background: #fff;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        h2, h3 {
+            margin-bottom: 15px;
+            color: #2c3e50;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 8px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        button, .btn {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: 0.3s;
+            display: inline-block;
+        }
+        button:hover, .btn:hover {
+            background-color: #2980b9;
+        }
+        .btn-success { background-color: #2ecc71; }
+        .btn-success:hover { background-color: #27ae60; }
+        .btn-qr { background-color: #8e44ad; }
+        .btn-qr:hover { background-color: #9b59b6; }
+        
+        .qr-container {
+            margin-top: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        .user-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #fff;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <!-- 1. لوحة المشرف: ضبط عنوان المحفظة -->
+    <div class="section">
+        <h2>لوحة المشرف: ضبط محفظة الشحن</h2>
+        <div class="input-group">
+            <label for="admin-wallet-input">عنوان محفظة المشرف:</label>
+            <input type="text" id="admin-wallet-input" placeholder="أدخل عنوان المحفظة (مثال: 0x123...ABC)">
+        </div>
+        <button onclick="saveAdminWallet()">حفظ وإنشاء QR Code للشحن</button>
+    </div>
+
+    <!-- 2. واجهة المستخدم: قائمة شحن الرصيد -->
+    <div class="section">
+        <h2>قائمة شحن الرصيد</h2>
+        <p>قم بتحويل المبلغ إلى العنوان التالي أو امسح الـ QR Code:</p>
+        <br>
+        <p><strong>العنوان:</strong> <span id="display-wallet-address">لم يتم التحديد بعد</span></p>
+        <div class="qr-container">
+            <div id="deposit-qr"></div>
+        </div>
+    </div>
+
+    <!-- 3. واجهة تسجيل الدخول -->
+    <div class="section" id="login-section">
+        <h2>تسجيل الدخول</h2>
+        <form id="login-form" onsubmit="handleManualLogin(event)">
+            <div class="input-group">
+                <label>رقم الهاتف / اسم المستخدم:</label>
+                <input type="text" id="login-username" required>
+            </div>
+            <div class="input-group">
+                <label>كلمة المرور:</label>
+                <input type="password" id="login-password" required>
+            </div>
+            <button type="submit" class="btn-success">تسجيل الدخول العادي</button>
+            
+            <!-- زر تسجيل الدخول عبر QR Code -->
+            <label for="qr-input-file" class="btn btn-qr" style="margin-right: 10px;">
+                تسجيل الدخول عبر QR Code 📷
+            </label>
+            <input type="file" id="qr-input-file" accept="image/*" class="hidden" onchange="loginWithQRImage(event)">
+        </form>
+    </div>
+
+    <!-- 4. ملف المستخدم الشخصي (يظهر بعد تسجيل الدخول) -->
+    <div class="section hidden" id="profile-section">
+        <h2>الملف الشخصي للمستخدم</h2>
+        <div class="user-card">
+            <div class="user-info">
+                <div>
+                    <p><strong>اسم المستخدم:</strong> <span id="profile-name"></span></p>
+                    <p><strong>رقم الهاتف:</strong> <span id="profile-phone"></span></p>
+                </div>
+                <!-- الـ QR Code الخاص بالمستخدم بجانب رقمه -->
+                <div id="user-personal-qr"></div>
+            </div>
+            <div>
+                <button class="btn btn-success" onclick="downloadUserQR()">تحميل الـ QR Code 📥</button>
+                <button class="btn" style="background-color: #e74c3c;" onclick="logout()">تسجيل الخروج</button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- عناصر مخفية لقراءة الـ QR -->
+<div id="reader" class="hidden"></div>
+
+<script>
+    // --- 1. إدارة محفظة المشرف (شحن الرصيد) ---
+    let depositQR = null;
+
+    function saveAdminWallet() {
+        const address = document.getElementById('admin-wallet-input').value.trim();
+        if(!address) {
+            alert('يرجى إدخال عنوان محفظة صحيح');
+            return;
+        }
+        
+        // حفظ مؤقت محلياً
+        localStorage.setItem('admin_wallet_address', address);
+        renderDepositQR(address);
+        alert('تم حفظ المحفظة وإنشاء الـ QR Code بنجاح!');
+    }
+
+    function renderDepositQR(address) {
+        document.getElementById('display-wallet-address').innerText = address;
+        const qrContainer = document.getElementById('deposit-qr');
+        qrContainer.innerHTML = ""; // تفريغ القديم
+
+        depositQR = new QRCode(qrContainer, {
+            text: address,
+            width: 160,
+            height: 160
+        });
+    }
+
+    // --- 2. إدارة المستخدمين وتوليد QR الخاص بالمستخدم ---
+    let userQR = null;
+
+    function generateUserQR(userData) {
+        const qrContainer = document.getElementById('user-personal-qr');
+        qrContainer.innerHTML = ""; // تفريغ
+
+        // تحويل بيانات المستخدم إلى نص JSON لتخزينها في الـ QR Code
+        const qrContent = JSON.stringify(userData);
+
+        userQR = new QRCode(qrContainer, {
+            text: qrContent,
+            width: 100,
+            height: 100
+        });
+    }
+
+    function downloadUserQR() {
+        const img = document.querySelector('#user-personal-qr img');
+        if (img) {
+            const link = document.createElement('a');
+            link.href = img.src;
+            link.download = `QR_Code_${Date.now()}.png`;
+            link.click();
+        } else {
+            alert('لم يتم العثور على صورة الـ QR');
+        }
+    }
+
+    // --- 3. تسجيل الدخول العادي والتلقائي ---
+    function handleManualLogin(e) {
+        e.preventDefault();
+        const username = document.getElementById('login-username').value;
+        const phone = "09" + Math.floor(10000000 + Math.random() * 90000000); // رقم هاتف عشوائي للتجربة
+
+        const userData = { username, phone, token: "SECRET_SESSION_TOKEN_" + Date.now() };
+        
+        // حفظ الجلسة محلياً
+        localStorage.setItem('current_user', JSON.stringify(userData));
+        showProfile(userData);
+    }
+
+    function showProfile(userData) {
+        document.getElementById('login-section').classList.add('hidden');
+        document.getElementById('profile-section').classList.remove('hidden');
+        document.getElementById('profile-name').innerText = userData.username;
+        document.getElementById('profile-phone').innerText = userData.phone;
+
+        // إنشاء QR الخاص بالمستخدم عند الدخول
+        generateUserQR(userData);
+    }
+
+    function logout() {
+        localStorage.removeItem('current_user');
+        document.getElementById('profile-section').classList.add('hidden');
+        document.getElementById('login-section').classList.remove('hidden');
+    }
+
+    // --- 4. قراءة QR Code من صورة لتسجيل الدخول ---
+    function loginWithQRImage(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const html5QrCode = new Html5Qrcode("reader");
+
+        html5QrCode.scanFile(file, true)
+            .then(decodedText => {
+                try {
+                    // فك تشفير البيانات المكتشفة في الـ QR Code
+                    const userData = JSON.parse(decodedText);
+                    
+                    if (userData && userData.username) {
+                        alert(`مرحباً بعودتك ${userData.username}! تم تسجيل الدخول بواسطة الـ QR Code.`);
+                        localStorage.setItem('current_user', JSON.stringify(userData));
+                        showProfile(userData);
+                    } else {
+                        alert('رمز QR غير صالحة لعملية تسجيل الدخول.');
+                    }
+                } catch (err) {
+                    alert('الـ QR Code المرفق لا يحتوي على بيانات تسجيل دخول صالحة.');
+                }
+            })
+            .catch(err => {
+                alert('عذراً، تعذر قراءة الـ QR Code من الصورة المرفقة.');
+            });
+    }
+
+    // --- 5. استعادة البيانات عند تحميل الصفحة ---
+    window.onload = function() {
+        // استعادة محفظة المشرف
+        const savedWallet = localStorage.getItem('admin_wallet_address');
+        if (savedWallet) {
+            document.getElementById('admin-wallet-input').value = savedWallet;
+            renderDepositQR(savedWallet);
+        }
+
+        // استعادة جلسة المستخدم
+        const savedUser = localStorage.getItem('current_user');
+        if (savedUser) {
+            showProfile(JSON.parse(savedUser));
+        }
+    };
+</script>
+
+</body>
+</html>
