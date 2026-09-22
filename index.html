@@ -8,6 +8,8 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 6 L58 32 L32 58 L6 32 Z' fill='none' stroke='%2300e5b0' stroke-width='4' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%2300e5b0'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <style>
 :root{
   --bg:#05070c; --bg2:#0a0e16; --card:rgba(16,23,36,.72);
@@ -517,6 +519,28 @@ input[type="datetime-local"]{direction:ltr;text-align:left}
     </div>
 
     <p class="cloud-status" id="cloudStatus"></p>
+  </div>
+</div>
+
+<!-- ═══════════ شاشة التحقق الثنائي 2FA للمدراء ═══════════ -->
+<div class="auth-wrap" id="twofaWrap" style="display:none">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div class="neon-logo"><svg width="46" height="46"><use href="#neonIcon"/></svg></div>
+      <h1>تحقق <span>ثنائي</span></h1>
+      <p>امسح أو ارفع رمز QR الخاص بحسابك الإداري لإتمام الدخول</p>
+    </div>
+    <div id="tfaCamWrap" style="display:none;margin-bottom:14px">
+      <video id="tfaVideo" autoplay playsinline muted style="width:100%;border-radius:14px;border:1px solid var(--line2)"></video>
+    </div>
+    <canvas id="tfaCanvas" style="display:none"></canvas>
+    <button class="btn" id="tfaCamBtn" onclick="start2FACamera()">📷 مسح الرمز بالكاميرا</button>
+    <div class="fgroup" style="margin-top:12px">
+      <label>أو ارفع صورة الرمز من جهازك</label>
+      <input type="file" id="tfaFile" accept="image/*" onchange="handle2FAFile(event)">
+    </div>
+    <button class="btn gray" onclick="cancel2FA()">إلغاء والعودة لتسجيل الدخول</button>
+    <p id="tfaMsg" class="msg"></p>
   </div>
 </div>
 
@@ -1391,6 +1415,11 @@ async function doLogin(){
   if(adm && adm.adminPass === await hash(pass)){
     btn.disabled = false; btn.innerHTML = "دخول إلى المتجر ←";
     document.getElementById("lgPass").value = "";
+    if(adm.twofa){
+      pendingAdmin = adm;
+      open2FAScreen();
+      return;
+    }
     setOk("lgMsg", "✅ أهلًا " + adm.name + " — جارٍ فتح لوحة التحكم...");
     startAdminSession("admin", adm);
     return;
@@ -1432,6 +1461,127 @@ function startAdminSession(role, admObj){
   refreshAll();
   openAdmin();
   toast(role === "owner" ? "👑 أهلًا بالمالك — تحكم كامل" : "🛡️ أهلًا " + admObj.name + " — حسب صلاحياتك", "gold");
+}
+
+/* ═══════════ التحقق الثنائي (2FA) للمدراء عبر QR ═══════════ */
+let pendingAdmin = null;
+let tfaStream = null;
+let tfaRAF = null;
+
+function genSecret(){
+  const arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
+  return Array.from(arr).map(function(b){ return b.toString(16).padStart(2, "0"); }).join("");
+}
+function safeId(phone){ return String(phone).replace(/[^0-9]/g, ""); }
+function qrPayload(a){ return a.phone + "::" + a.twofa; }
+
+function open2FAScreen(){
+  stop2FACamera();
+  document.getElementById("authWrap").style.display = "none";
+  document.getElementById("twofaWrap").style.display = "flex";
+  document.getElementById("tfaMsg").textContent = "";
+  document.getElementById("tfaFile").value = "";
+}
+function cancel2FA(){
+  stop2FACamera();
+  pendingAdmin = null;
+  document.getElementById("twofaWrap").style.display = "none";
+  document.getElementById("authWrap").style.display = "flex";
+}
+
+async function start2FACamera(){
+  try{
+    tfaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    const video = document.getElementById("tfaVideo");
+    video.srcObject = tfaStream;
+    document.getElementById("tfaCamWrap").style.display = "block";
+    scan2FALoop();
+  }catch(e){
+    setErr("tfaMsg", "❌ تعذر فتح الكاميرا — استخدم رفع الصورة بدلاً من ذلك");
+  }
+}
+function scan2FALoop(){
+  const video = document.getElementById("tfaVideo");
+  const canvas = document.getElementById("tfaCanvas");
+  if(video.readyState === video.HAVE_ENOUGH_DATA && window.jsQR){
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imgData.data, canvas.width, canvas.height);
+    if(code){ stop2FACamera(); verify2FA(code.data); return; }
+  }
+  tfaRAF = requestAnimationFrame(scan2FALoop);
+}
+function stop2FACamera(){
+  if(tfaRAF){ cancelAnimationFrame(tfaRAF); tfaRAF = null; }
+  if(tfaStream){ tfaStream.getTracks().forEach(function(t){ t.stop(); }); tfaStream = null; }
+  const wrap = document.getElementById("tfaCamWrap");
+  if(wrap) wrap.style.display = "none";
+}
+function handle2FAFile(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const img = new Image();
+  img.onload = function(){
+    const canvas = document.getElementById("tfaCanvas");
+    canvas.width = img.width; canvas.height = img.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = window.jsQR ? jsQR(imgData.data, canvas.width, canvas.height) : null;
+    if(code) verify2FA(code.data);
+    else setErr("tfaMsg", "❌ تعذر قراءة رمز QR من هذه الصورة، جرّب صورة أوضح");
+  };
+  img.onerror = function(){ setErr("tfaMsg", "❌ تعذر فتح الصورة"); };
+  img.src = URL.createObjectURL(file);
+}
+function verify2FA(payload){
+  if(!pendingAdmin) return;
+  const expected = qrPayload(pendingAdmin);
+  if(payload === expected){
+    setOk("tfaMsg", "✅ تم التحقق بنجاح — جارٍ فتح لوحة التحكم...");
+    const adm = pendingAdmin;
+    pendingAdmin = null;
+    setTimeout(function(){
+      stop2FACamera();
+      document.getElementById("twofaWrap").style.display = "none";
+      document.getElementById("authWrap").style.display = "flex";
+      startAdminSession("admin", adm);
+    }, 500);
+  } else {
+    setErr("tfaMsg", "❌ هذا الرمز لا يخص هذا الحساب — جرّب مرة أخرى");
+  }
+}
+
+async function renderAdminQRs(){
+  if(!window.QRCode) return;
+  const list = db.admins || [];
+  for(const a of list){
+    if(!a.twofa) continue;
+    const id = safeId(a.phone);
+    const imgEl = document.getElementById("qrimg-" + id);
+    if(!imgEl) continue;
+    try{
+      const url = await QRCode.toDataURL(qrPayload(a), { margin: 1, width: 160 });
+      imgEl.src = url;
+      const dl = document.getElementById("qrdl-" + id);
+      if(dl){ dl.href = url; dl.download = "2fa-" + id + ".png"; }
+    }catch(e){ console.error("QR generation error:", e); }
+  }
+}
+async function regen2FA(phone){
+  if(!isOwner()) return;
+  const confirmed = await window.showConfirm("سيتم إبطال الرمز القديم فورًا — هل تريد توليد رمز 2FA جديد؟", "تجديد رمز التحقق", "warn");
+  if(!confirmed) return;
+  await syncFromCloud();
+  const adm = (db.admins || []).find(function(a){ return a.phone === phone; });
+  if(!adm) return;
+  adm.twofa = genSecret();
+  await syncToCloud();
+  renderAdminPanels();
+  toast("🔄 تم تجديد رمز التحقق الثنائي");
 }
 
 function applySessionUI(){
@@ -2166,11 +2316,26 @@ function renderAdminsList(){
     '<label class="perm-item"><input type="checkbox" value="' + p.key + '" class="am-p-ck"> <span>' + p.label + '</span></label>'
   ).join("");
 
-  document.getElementById("adminsList").innerHTML = list.map(a =>
-    '<div class="tx" style="margin:0 0 8px"><div><b>' + esc(a.name) + ' (' + esc(a.phone) + ')</b>' +
-    '<span>صلاحيات: ' + Object.keys(a.perms || {}).filter(k => a.perms[k]).length + ' من ' + PERMS.length + '</span></div>' +
-    '<button class="mini no" onclick="removeAdminAccount(\'' + esc(a.phone) + '\')">حذف</button></div>'
-  ).join("");
+  document.getElementById("adminsList").innerHTML = list.map(a => {
+    const id = safeId(a.phone);
+    const qrBlock = a.twofa ?
+      '<div style="display:flex;align-items:center;gap:12px;background:rgba(0,0,0,.3);border-radius:12px;padding:10px;margin-top:8px">' +
+        '<img id="qrimg-' + id + '" style="width:64px;height:64px;border-radius:8px;background:#fff;padding:4px" alt="2FA">' +
+        '<div style="flex:1">' +
+          '<span style="font-size:10.5px;color:var(--mut);display:block;margin-bottom:6px">🔐 رمز التحقق الثنائي — مطلوب عند تسجيل دخول هذا المدير</span>' +
+          '<a id="qrdl-' + id + '" class="mini ok" style="text-decoration:none;display:inline-block" download>⬇️ تحميل الرمز</a> ' +
+          '<button class="mini gold" onclick="regen2FA(\'' + esc(a.phone) + '\')">🔄 تجديد</button>' +
+        '</div>' +
+      '</div>' : '<button class="mini gold" style="margin-top:8px" onclick="regen2FA(\'' + esc(a.phone) + '\')">🔐 تفعيل التحقق الثنائي</button>';
+    return '<div class="tx" style="margin:0 0 8px;flex-direction:column;align-items:stretch;gap:2px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center">' +
+      '<div><b>' + esc(a.name) + ' (' + esc(a.phone) + ')</b>' +
+      '<span>صلاحيات: ' + Object.keys(a.perms || {}).filter(k => a.perms[k]).length + ' من ' + PERMS.length + '</span></div>' +
+      '<button class="mini no" onclick="removeAdminAccount(\'' + esc(a.phone) + '\')">حذف</button></div>' +
+      qrBlock +
+    '</div>';
+  }).join("");
+  renderAdminQRs();
 }
 
 async function addAdminAccount(){
@@ -2188,12 +2353,12 @@ async function addAdminAccount(){
   const admins = db.admins || [];
   if(admins.some(a => a.phone === phone)) return setErr("amMsg", "❌ المدير موجود مسبقاً");
 
-  admins.push({ name, phone, adminPass: await hash(pass), perms });
+  admins.push({ name, phone, adminPass: await hash(pass), perms, twofa: genSecret() });
   db.admins = admins;
 
   await syncToCloud();
   renderAdminPanels();
-  setOk("amMsg", "👑 تم إضافة المدير بنجاح");
+  setOk("amMsg", "👑 تم إضافة المدير بنجاح — حمّل رمز التحقق الثنائي الخاص به من الأسفل وسلّمه له");
 }
 
 async function removeAdminAccount(phone){
